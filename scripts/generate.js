@@ -17,34 +17,32 @@ const STAGES = [
 const EGG_EVERY = 100; // after legendary, one new egg per this many build days
 
 // ---------- GitHub data ----------
-async function gql(query, variables, token) {
-  const res = await fetch('https://api.github.com/graphql', {
-    method: 'POST',
-    headers: { Authorization: `bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, variables }),
-  });
-  const json = await res.json();
-  if (json.errors || !json.data) throw new Error(JSON.stringify(json.errors || json));
-  return json.data;
+// Reads the same public contribution calendar shown on your profile, so private
+// work (e.g. company org commits) counts as long as your grid shows it. No token needed.
+async function fetchYear(login, year) {
+  const url = `https://github.com/users/${login}/contributions?from=${year}-01-01&to=${year}-12-31`;
+  const res = await fetch(url, { headers: { 'User-Agent': 'commit-dragon' } });
+  if (!res.ok) throw new Error(`GitHub returned ${res.status} for ${url}`);
+  const html = await res.text();
+  const days = new Map();
+  for (const tag of html.match(/<td[^>]*ContributionCalendar-day[^>]*>/g) || []) {
+    const date = tag.match(/data-date="([\d-]+)"/);
+    const level = tag.match(/data-level="(\d)"/);
+    if (date && level) days.set(date[1], +level[1]);
+  }
+  return days;
 }
 
-async function fetchDays(login, token) {
-  const { user } = await gql(`query($l:String!){user(login:$l){createdAt}}`, { l: login }, token);
+async function fetchDays(login) {
   const days = new Map();
-  const now = new Date();
-  let from = new Date(user.createdAt);
-  while (from < now) {
-    let to = new Date(from.getTime() + 364 * 864e5); // API caps ranges at 1 year
-    if (to > now) to = now;
-    const d = await gql(
-      `query($l:String!,$f:DateTime!,$t:DateTime!){user(login:$l){contributionsCollection(from:$f,to:$t){
-        contributionCalendar{weeks{contributionDays{date contributionCount}}}}}}`,
-      { l: login, f: from.toISOString(), t: to.toISOString() }, token);
-    for (const w of d.user.contributionsCollection.contributionCalendar.weeks)
-      for (const day of w.contributionDays)
-        days.set(day.date, Math.max(days.get(day.date) || 0, day.contributionCount));
-    from = to;
+  let emptyYears = 0;
+  for (let year = new Date().getUTCFullYear(); year >= 2008 && emptyYears < 2; year--) {
+    const yearDays = await fetchYear(login, year);
+    const active = [...yearDays.values()].filter((v) => v > 0).length;
+    emptyYears = active ? 0 : emptyYears + 1;
+    for (const [d, v] of yearDays) days.set(d, v);
   }
+  if (!days.size) throw new Error(`Couldn't read the contribution calendar for ${login}`);
   return days;
 }
 
@@ -301,9 +299,9 @@ ${demos.map(([total, streak, active, cap]) => `<figure>${render({ login: 'demo',
   if (args.includes('--days')) {
     stats = { total: +arg('--days'), streak: +arg('--streak', 0), active: !args.includes('--idle') };
   } else {
-    const login = process.env.GITHUB_USER, token = process.env.GITHUB_TOKEN;
-    if (!login || !token) throw new Error('Set GITHUB_USER and GITHUB_TOKEN');
-    stats = computeStats(await fetchDays(login, token));
+    const login = process.env.GITHUB_USER;
+    if (!login) throw new Error('Set GITHUB_USER to your GitHub username');
+    stats = computeStats(await fetchDays(login));
   }
   fs.mkdirSync(path.dirname(out), { recursive: true });
   fs.writeFileSync(out, render({ login: process.env.GITHUB_USER || 'you', ...stats }));
