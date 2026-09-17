@@ -1,5 +1,7 @@
 ## Hi there 👋
 
+
+![My dragon](./dist/dragon.svg)
 <!--
 **ronitgandhiexo/ronitgandhiexo** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
 
